@@ -143,7 +143,7 @@ with st.sidebar:
         value=640,
         help="Resize frames before inference to speed up processing. 0 = original resolution.",
     )
-    max_frames = st.number_input("Max frames to process", 10, 100000, 100)
+    max_frames = st.number_input("Max frames to process", 10, 100000, 750)
     sequential_offload = st.checkbox("Sequential Offload (low VRAM)",
                                      value=False,
                                      help="Load/unload each model per-frame. Slower but uses less VRAM.")
