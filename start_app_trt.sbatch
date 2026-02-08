@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name="w2d"
+#SBATCH --job-name="w2d-trt"
 #SBATCH --output=logs/%x_%j.out
 #SBATCH --error=logs/%x_%j.err
 #SBATCH --time=3:59:59
@@ -27,13 +27,12 @@ set -a
 [ -f .env ] && source .env
 set +a
 
-# Run Streamlit inside Singularity (foreground, keeps job alive)
-# Source code is bind-mounted from $(pwd) — no rebuild needed for code changes
+# Run Streamlit inside TensorRT Singularity image
 singularity exec --nv \
     --env "HF_TOKEN=${HF_TOKEN:-}" \
     -B "$(pwd)":/app \
     -B "$(pwd)/cache":/app/cache \
-    world2data.sif \
+    world2data-trt.sif \
     python -m streamlit run /app/app.py \
         --server.port=8501 \
         --server.address=0.0.0.0 \

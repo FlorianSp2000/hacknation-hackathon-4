@@ -71,11 +71,12 @@ pages/      — additional Streamlit pages (e.g. live webcam)
 | `segmenter` | `Segmenter` | `predict(frame, text_prompt) -> SegmentationResult` | sam3, fastsam, rf-detr-seg |
 | `vlm` | `VLM` | `predict(frame, prompt) -> VLMResult` | lfm2.5-vl, lfm2.5-vl-onnx, lfm2.5-vl-mlx |
 | `tracker` | `Tracker` | `update(frame) -> TrackingResult` | yolo-tracker |
+| `state_classifier` | `StateClassifier` | `classify(frame, boxes) -> [(state, conf)]` | siglip |
 
 ### Adding a model
 
 1. Create `models/<category>/<name>.py`
-2. Implement the ABC (`Detector`, `Segmenter`, `VLM`, or `Tracker`) with `load()`, `predict()`/`update()`, `unload()`
+2. Implement the ABC (`Detector`, `Segmenter`, `VLM`, `Tracker`, or `StateClassifier`) with `load()`, `predict()`/`update()`/`classify()`, `unload()`
 3. Decorate with `@register("category", "name")` and import in `models/__init__.py`
 
 ### Adding a modality
@@ -90,7 +91,7 @@ pages/      — additional Streamlit pages (e.g. live webcam)
 - `pipeline/runner.py` — frame-by-frame orchestration with parallel/sequential modes + timing
 - `pipeline/visualizer.py` — OpenCV drawing for all modalities (det, seg, tracking, hands, temporal)
 - `pipeline/interactions.py` — MediaPipe hand-object interaction detection
-- `pipeline/nav_state.py` — builds `NavigationTimeline` from tracker + VLM results
+- `pipeline/nav_state.py` — builds `NavigationTimeline` from tracker + VLM/state classifier results
 - `pipeline/exporter.py` — structured JSON ground truth export
 - `pipeline/evaluator.py` — accuracy measurement against manual labels
 
@@ -102,8 +103,15 @@ pages/      — additional Streamlit pages (e.g. live webcam)
 
 ### Container structure
 
-- **Image** (`world2data.sif`): CUDA + Python + all pip deps in `/opt/venv/`. No source code.
+Two images available:
+
+| Image | Base | Use case |
+|---|---|---|
+| `world2data.sif` | `nvidia/cuda:12.4.1-runtime` | Standard CUDA inference |
+| `world2data-trt.sif` | `nvcr.io/nvidia/tensorrt:24.12-py3` | CUDA + TensorRT acceleration |
+
 - **Bind mounts** (at runtime via sbatch):
   - `$(pwd)` → `/app` — source code
   - `$(pwd)/cache` → `/app/cache` — HuggingFace/torch model weight cache
 - `PYTHONPATH=/app` set in `%environment` so imports resolve
+- No rebuild needed for code changes — only for dependency changes

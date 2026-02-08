@@ -85,12 +85,14 @@ class SigLIPStateClassifier(StateClassifier):
         self._pipe = None
 
     def load(self) -> None:
-        from transformers import pipeline as hf_pipeline
+        from transformers import pipeline as hf_pipeline, SiglipTokenizer, SiglipImageProcessor
 
         device = 0 if torch.cuda.is_available() else -1
         self._pipe = hf_pipeline(
             "zero-shot-image-classification",
             model=self.MODEL_ID,
+            tokenizer=SiglipTokenizer.from_pretrained(self.MODEL_ID),
+            image_processor=SiglipImageProcessor.from_pretrained(self.MODEL_ID),
             device=device,
         )
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any
 import numpy as np
 import torch
@@ -241,24 +242,30 @@ class LFM25VLONNX(VLM):
         self._processor = None
 
     def load(self) -> None:
+        import os
         import onnxruntime as ort
-        from huggingface_hub import hf_hub_download, list_repo_files
+        from huggingface_hub import snapshot_download
         from transformers import AutoProcessor
 
-        # Download ONNX model files + associated data shards
-        embed_tokens_path = hf_hub_download(self.MODEL_ID, self.EMBED_TOKENS_FILE)
-        embed_images_path = hf_hub_download(self.MODEL_ID, self.EMBED_IMAGES_FILE)
-        decoder_path = hf_hub_download(self.MODEL_ID, self.DECODER_FILE)
+        # snapshot_download with local_dir_use_symlinks=False gives real files
+        # in a flat directory — avoids ONNX Runtime's external data path
+        # validation rejecting HF cache symlinks that "escape" the model dir.
+        local_dir = Path(snapshot_download(
+            self.MODEL_ID,
+            local_dir=Path.home() / ".cache" / "world2data" / "lfm25-onnx",
+            local_dir_use_symlinks=False,
+        )) / "onnx"
 
-        # Download all split data files for each model component
-        for f in list_repo_files(self.MODEL_ID):
-            for name in [self.EMBED_TOKENS_FILE, self.EMBED_IMAGES_FILE, self.DECODER_FILE]:
-                if f.startswith(name + "_data"):
-                    hf_hub_download(self.MODEL_ID, f)
+        # Constrain thread count to avoid pthread_setaffinity_np failures
+        # on SLURM nodes with cgroup CPU limits.
+        n_threads = int(os.environ.get("OMP_NUM_THREADS", "4"))
+        opts = ort.SessionOptions()
+        opts.intra_op_num_threads = n_threads
+        opts.inter_op_num_threads = n_threads
 
-        self._embed_tokens = ort.InferenceSession(embed_tokens_path)
-        self._embed_images = ort.InferenceSession(embed_images_path)
-        self._decoder = ort.InferenceSession(decoder_path)
+        self._embed_tokens = ort.InferenceSession(str(local_dir / "embed_tokens_fp16.onnx"), opts)
+        self._embed_images = ort.InferenceSession(str(local_dir / "embed_images_fp16.onnx"), opts)
+        self._decoder = ort.InferenceSession(str(local_dir / "decoder_q4.onnx"), opts)
         self._processor = AutoProcessor.from_pretrained(self.MODEL_ID, trust_remote_code=True)
 
     def _init_kv_cache(self) -> dict[str, np.ndarray]:

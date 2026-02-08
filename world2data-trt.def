@@ -20,6 +20,9 @@ From: nvcr.io/nvidia/tensorrt:24.12-py3
     export VIRTUAL_ENV=/opt/venv
     export PATH="/opt/venv/bin:$PATH"
 
+    # Large CUDA wheels (nccl ~200MB) need more than default 30s timeout
+    export UV_HTTP_TIMEOUT=300
+
     # PyTorch with CUDA 12.4 (TRT image ships CUDA 12.x)
     uv pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
 
@@ -38,7 +41,9 @@ From: nvcr.io/nvidia/tensorrt:24.12-py3
         "mediapipe>=0.10.14" \
         "rfdetr" \
         "onnxruntime-gpu" \
-        "streamlit-webrtc>=0.47"
+        "streamlit-webrtc>=0.47" \
+        "lap" \
+        "sentencepiece"
     rm -rf /tmp/build
 
     # Cleanup

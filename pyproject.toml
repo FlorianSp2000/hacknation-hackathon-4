@@ -18,6 +18,7 @@ dependencies = [
     "onnxruntime",
     "streamlit-webrtc>=0.47",
     "lap>=0.5.12",
+    "sentencepiece",
 ]
 
 [dependency-groups]

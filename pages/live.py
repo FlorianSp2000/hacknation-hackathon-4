@@ -15,7 +15,7 @@ from streamlit_webrtc import WebRtcMode, VideoProcessorBase, webrtc_streamer
 import models  # triggers registration
 from core.types import DetectionResult, FrameResult, NavigationTimeline
 from core.registry import create, get_class, list_models
-from core.video import export_annotated_video, get_video_info
+from core.video import export_annotated_video, get_video_info, _reencode_h264
 from models.vlm.lfm25 import GENERIC_JSON_SCHEMA_PROMPT, NAV_STATE_PROMPT
 from pipeline.evaluator import evaluate_nav_accuracy, parse_manual_labels
 from pipeline.exporter import export_ground_truth, export_ground_truth_json
@@ -45,7 +45,7 @@ def _init_state() -> None:
         "live_trk_name": "bytetrack",
         "live_seg_name": "rf-detr-seg",
         "live_det_name": "yolov8",
-        "live_vlm_name": "lfm2.5-vl-mlx",
+        "live_vlm_name": "lfm2.5-vl",
         "live_loaded": False,
         "live_auto_loaded": False,
         "live_interaction_engine": None,
@@ -259,7 +259,15 @@ class LiveVideoProcessor(VideoProcessorBase):
             if self._record_writer is not None:
                 self._record_writer.release()
                 self._record_writer = None
-            return self._record_path
+            path = self._record_path
+        # Re-encode mp4v → H.264 for browser/OS playback
+        if path and Path(path).exists() and Path(path).stat().st_size > 0:
+            raw = Path(path)
+            h264 = raw.with_suffix(".h264.mp4")
+            _reencode_h264(raw, h264)
+            raw.unlink(missing_ok=True)
+            h264.rename(raw)
+        return path
 
     def recv(self, frame: av.VideoFrame) -> av.VideoFrame:
         img = frame.to_ndarray(format="bgr24")
@@ -798,7 +806,7 @@ with st.sidebar:
     st.divider()
     enable_vlm = st.checkbox("Enable Liquid LFM", value=True)
     vlm_names = list_models("vlm")
-    preferred = "lfm2.5-vl-mlx" if "lfm2.5-vl-mlx" in vlm_names else vlm_names[0]
+    preferred = "lfm2.5-vl" if "lfm2.5-vl" in vlm_names else vlm_names[0]
     vlm_default = vlm_names.index(st.session_state["live_vlm_name"]) if st.session_state["live_vlm_name"] in vlm_names else vlm_names.index(preferred)
     vlm_choice = st.selectbox("VLM", vlm_names, index=vlm_default, disabled=not enable_vlm)
     prompt_mode = st.selectbox("Prompt Mode", ["Navigation (focused)", "Generic (broad)"], index=0, disabled=not enable_vlm)
