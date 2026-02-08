@@ -25,6 +25,29 @@ from pipeline.evaluator import evaluate_nav_accuracy, parse_manual_labels
 
 st.set_page_config(layout="wide", page_title="World2Data — Navigation Ground Truth")
 
+
+def _build_analysis_results_json(
+    results: list[FrameResult],
+    info: dict,
+    nav_timeline: NavigationTimeline | None,
+) -> str:
+    payload = export_ground_truth(results, info, nav_timeline=nav_timeline)
+    timing_keys = sorted({k for r in results for k in r.timings.keys()})
+    payload["timing_seconds"] = {
+        key: [float(r.timings[key]) for r in results if key in r.timings]
+        for key in timing_keys
+    }
+    payload["frames_diagnostics"] = [
+        {
+            "frame_idx": r.frame_idx,
+            "timings": {k: float(v) for k, v in r.timings.items()},
+            "num_hands": len(getattr(r, "hand_poses", []) or []),
+            "num_interactions": len(getattr(r, "interactions", []) or []),
+        }
+        for r in results
+    ]
+    return json.dumps(payload, indent=2, default=str)
+
 # --- Session state defaults ---
 for key, default in [
     ("results", []),
@@ -712,13 +735,23 @@ if uploaded:
 
             st.divider()
             gt_json = export_ground_truth_json(results, info, nav_timeline=nav_timeline)
-            st.download_button(
-                "Download Ground Truth JSON",
-                gt_json,
-                file_name="ground_truth.json",
-                mime="application/json",
-                type="primary",
-            )
+            analysis_json = _build_analysis_results_json(results, info, nav_timeline=nav_timeline)
+            dl_col1, dl_col2 = st.columns(2)
+            with dl_col1:
+                st.download_button(
+                    "Download Ground Truth JSON",
+                    gt_json,
+                    file_name="ground_truth.json",
+                    mime="application/json",
+                    type="primary",
+                )
+            with dl_col2:
+                st.download_button(
+                    "Download Analysis Results JSON",
+                    analysis_json,
+                    file_name="analysis_results.json",
+                    mime="application/json",
+                )
 
         # ============================================================
         # ACCURACY TAB

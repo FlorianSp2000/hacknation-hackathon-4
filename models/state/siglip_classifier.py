@@ -31,6 +31,27 @@ DEFAULT_CANDIDATE_LABELS = [
     "an obstacle blocking the path",
 ]
 
+# Optional class-aware candidate labels. If a class hint is provided in the
+# bbox tuple, these are used instead of the broad defaults to reduce noise.
+CLASS_CANDIDATE_LABELS = {
+    "door": ["an open door", "a closed door", "a partially open door"],
+    "cabinet": ["an open cabinet", "a closed cabinet", "a partially open door"],
+    "drawer": ["an open drawer", "a closed drawer", "a partially open door"],
+    "refrigerator": ["an open refrigerator", "a closed refrigerator", "a partially open door"],
+    "microwave": ["an open door", "a closed door", "a partially open door"],
+    "oven": ["an open door", "a closed door", "a partially open door"],
+    "toaster": ["an open door", "a closed door", "a partially open door"],
+    "bottle": ["a person drinking from a bottle", "a person holding a bottle", "a bottle lying on a table"],
+    "water bottle": ["a person drinking from a bottle", "a person holding a bottle", "a bottle lying on a table"],
+    "cup": ["a person drinking from a cup", "a person holding a cup", "a cup on a table"],
+    "mug": ["a person drinking from a mug", "a person holding a mug", "a mug on a table"],
+    "glass": ["a person drinking from a glass", "a person holding a glass", "a glass on a table"],
+    "wine glass": ["a person drinking from a glass", "a person holding a glass", "a glass on a table"],
+    "phone": ["a person using a phone", "a person holding a phone", "a phone lying on a table"],
+    "cell phone": ["a person using a phone", "a person holding a phone", "a phone lying on a table"],
+    "person": ["a person waving", "a person pointing", "a person giving thumbs up", "a person standing idle"],
+}
+
 # Map candidate labels to simplified state strings
 _LABEL_TO_STATE = {
     "an open door": "open",
@@ -45,7 +66,45 @@ _LABEL_TO_STATE = {
     "a clear passage": "clear",
     "a blocked passage": "blocked",
     "an obstacle blocking the path": "blocked",
+    "a person drinking from a bottle": "drinking",
+    "a person holding a bottle": "holding",
+    "a bottle lying on a table": "idle",
+    "a person drinking from a cup": "drinking",
+    "a person holding a cup": "holding",
+    "a cup on a table": "idle",
+    "a person drinking from a mug": "drinking",
+    "a person holding a mug": "holding",
+    "a mug on a table": "idle",
+    "a person drinking from a glass": "drinking",
+    "a person holding a glass": "holding",
+    "a glass on a table": "idle",
+    "a person using a phone": "using_phone",
+    "a person holding a phone": "holding",
+    "a phone lying on a table": "idle",
+    "a person waving": "wave",
+    "a person pointing": "point",
+    "a person giving thumbs up": "thumbs_up",
+    "a person standing idle": "idle",
 }
+
+
+def _candidate_labels_for_class(class_hint: str, default_labels: list[str]) -> list[str]:
+    hint = (class_hint or "").lower().replace("_", " ").replace("-", " ").strip()
+    if hint in CLASS_CANDIDATE_LABELS:
+        return CLASS_CANDIDATE_LABELS[hint]
+    if "phone" in hint:
+        return CLASS_CANDIDATE_LABELS["phone"]
+    if "bottle" in hint:
+        return CLASS_CANDIDATE_LABELS["bottle"]
+    if "cup" in hint:
+        return CLASS_CANDIDATE_LABELS["cup"]
+    if "mug" in hint:
+        return CLASS_CANDIDATE_LABELS["mug"]
+    if hint.endswith("glass") or hint == "glass":
+        return CLASS_CANDIDATE_LABELS["glass"]
+    if hint == "person":
+        return CLASS_CANDIDATE_LABELS["person"]
+    return default_labels
 
 
 def _crop_bbox(frame: np.ndarray, bbox: tuple, padding: int = 10) -> np.ndarray | None:
@@ -118,7 +177,9 @@ class SigLIPStateClassifier(StateClassifier):
             pil_crop = Image.fromarray(crop[:, :, ::-1])
 
             # Run zero-shot classification
-            preds = self._pipe(pil_crop, candidate_labels=self.candidate_labels)
+            cls_hint = str(bbox[5]) if len(bbox) >= 6 else ""
+            candidate_labels = _candidate_labels_for_class(cls_hint, self.candidate_labels)
+            preds = self._pipe(pil_crop, candidate_labels=candidate_labels)
 
             if preds:
                 top = preds[0]  # Highest confidence
