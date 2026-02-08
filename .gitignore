@@ -1,3 +1,5 @@
+.claude
+.mcp.json
 # Logs
 logs
 *.log
@@ -154,3 +156,7 @@ uploads/
 
 # Model cache
 .cache/
+cache/
+
+# Singularity images
+*.sif

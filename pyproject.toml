@@ -1,0 +1,22 @@
+[project]
+name = "hacknation-hackathon-4"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "streamlit>=1.30",
+    "torch>=2.0",
+    "transformers @ git+https://github.com/huggingface/transformers@2a5ba8b53d298ed8421e09831bf96bb6d056a24d",
+    "ultralytics>=8.0",
+    "opencv-python>=4.8",
+    "numpy>=1.24",
+    "Pillow>=10.0",
+    "accelerate",
+]
+
+[dependency-groups]
+dev = [
+    "secure-cluster-mcp",
+]
+
+[tool.uv.sources]
+secure-cluster-mcp = { git = "https://github.com/FlorianSp2000/secure-cluster-mcp.git" }
