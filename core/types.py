@@ -16,8 +16,19 @@ class BBox:
 
 
 @dataclass
+class TrackedBBox(BBox):
+    track_id: int = -1
+
+
+@dataclass
 class DetectionResult:
     boxes: list[BBox]
+    frame_idx: int
+
+
+@dataclass
+class TrackingResult:
+    boxes: list[TrackedBBox]
     frame_idx: int
 
 
@@ -60,12 +71,55 @@ class Interaction:
 
 
 @dataclass
+class StateChange:
+    object_name: str
+    before_state: str
+    after_state: str
+    confidence: str  # "high" / "medium" / "low"
+
+
+@dataclass
+class TemporalChange:
+    state_changes: list[StateChange]
+    actions_detected: list[str]
+    frame_idx_before: int
+    frame_idx_after: int
+    raw_text: str
+
+
+@dataclass
+class ObjectStateEntry:
+    frame_start: int
+    frame_end: int
+    state: str  # open/closed/ajar/blocked/clear/unknown
+
+
+@dataclass
+class TrackedNavObject:
+    track_id: int
+    object_type: str  # door/drawer/handle/cabinet/passage/obstacle
+    name: str  # human-readable name from VLM
+    class_name: str  # from YOLO tracker
+    state_timeline: list[ObjectStateEntry] = field(default_factory=list)
+    transitions: list[tuple[int, str, str]] = field(default_factory=list)  # (frame, from_state, to_state)
+
+
+@dataclass
+class NavigationTimeline:
+    objects: list[TrackedNavObject] = field(default_factory=list)
+    total_transitions: int = 0
+    video_fps: float = 30.0
+
+
+@dataclass
 class FrameResult:
     frame_idx: int
     frame: np.ndarray
     detection: DetectionResult | None = None
     segmentation: SegmentationResult | None = None
     vlm: VLMResult | None = None
+    tracking: TrackingResult | None = None
+    temporal_changes: TemporalChange | None = None
     hand_poses: list[HandPose] = field(default_factory=list)
     interactions: list[Interaction] = field(default_factory=list)
     timings: dict[str, float] = field(default_factory=dict)

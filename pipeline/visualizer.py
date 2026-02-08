@@ -3,7 +3,10 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
-from core.types import DetectionResult, SegmentationResult, VLMResult, FrameResult
+from core.types import (
+    DetectionResult, SegmentationResult, VLMResult, FrameResult,
+    TrackingResult, TemporalChange,
+)
 
 
 # Deterministic colors for segmentation masks
@@ -12,6 +15,16 @@ _COLORS = [
     (255, 0, 255), (0, 255, 255), (128, 0, 255), (255, 128, 0),
     (0, 128, 255), (128, 255, 0), (255, 0, 128), (0, 255, 128),
 ]
+
+
+def _track_color(track_id: int) -> tuple[int, int, int]:
+    """Deterministic color for a track ID using a hash-based approach."""
+    if track_id < 0:
+        return (128, 128, 128)
+    h = (track_id * 41 + 7) % 180  # hue in [0, 180)
+    hsv = np.array([[[h, 255, 220]]], dtype=np.uint8)
+    bgr = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)[0, 0]
+    return int(bgr[0]), int(bgr[1]), int(bgr[2])
 
 
 def draw_detections(frame: np.ndarray, det: DetectionResult) -> np.ndarray:
@@ -23,6 +36,23 @@ def draw_detections(frame: np.ndarray, det: DetectionResult) -> np.ndarray:
         label = f"{box.class_name} {box.confidence:.2f}"
         (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
         cv2.rectangle(out, pt1, (pt1[0] + tw, pt1[1] - th - 4), (0, 255, 0), -1)
+        cv2.putText(out, label, (pt1[0], pt1[1] - 4),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1)
+    return out
+
+
+def draw_tracking(frame: np.ndarray, tracking: TrackingResult) -> np.ndarray:
+    """Draw tracked bboxes with persistent color-coded IDs."""
+    out = frame.copy()
+    for box in tracking.boxes:
+        color = _track_color(box.track_id)
+        pt1 = (int(box.x1), int(box.y1))
+        pt2 = (int(box.x2), int(box.y2))
+        cv2.rectangle(out, pt1, pt2, color, 2)
+
+        label = f"ID:{box.track_id} {box.class_name} {box.confidence:.2f}"
+        (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
+        cv2.rectangle(out, (pt1[0], pt1[1] - th - 8), (pt1[0] + tw, pt1[1]), color, -1)
         cv2.putText(out, label, (pt1[0], pt1[1] - 4),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1)
     return out
@@ -63,7 +93,6 @@ def draw_hands_and_interactions(frame: np.ndarray, result: FrameResult) -> np.nd
     hand_poses = getattr(result, "hand_poses", [])
     interactions = getattr(result, "interactions", [])
 
-    # Hands
     for hand in hand_poses:
         x1, y1, x2, y2 = hand.bbox
         cv2.rectangle(out, (x1, y1), (x2, y2), (255, 180, 0), 2)
@@ -79,11 +108,34 @@ def draw_hands_and_interactions(frame: np.ndarray, result: FrameResult) -> np.nd
         for x, y in hand.keypoints:
             cv2.circle(out, (x, y), 2, (0, 140, 255), -1)
 
-    # Interactions
     y = 20
     for inter in interactions:
         text = f"{inter.hand_id} -> {inter.target_class}[{inter.target_index}] ({inter.contact_score:.2f})"
         cv2.putText(out, text, (10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (80, 255, 80), 1)
+        y += 18
+
+    return out
+
+
+def draw_temporal_changes(frame: np.ndarray, tc: TemporalChange) -> np.ndarray:
+    """Overlay state change annotations on the frame."""
+    out = frame.copy()
+    y = 30
+
+    header = f"Changes ({tc.frame_idx_before} -> {tc.frame_idx_after})"
+    cv2.putText(out, header, (10, y),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
+    y += 25
+
+    for sc in tc.state_changes:
+        text = f"{sc.object_name}: {sc.before_state} -> {sc.after_state} [{sc.confidence}]"
+        cv2.putText(out, text[:80], (10, y),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 200, 255), 1)
+        y += 20
+
+    for action in tc.actions_detected:
+        cv2.putText(out, f"Action: {action[:60]}", (10, y),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.4, (200, 200, 0), 1)
         y += 18
 
     return out
@@ -95,10 +147,14 @@ def draw_all(frame: np.ndarray, result: FrameResult) -> np.ndarray:
     interactions = getattr(result, "interactions", [])
     if result.segmentation:
         out = draw_segmentation(out, result.segmentation)
-    if result.detection:
+    if result.tracking:
+        out = draw_tracking(out, result.tracking)
+    elif result.detection:
         out = draw_detections(out, result.detection)
     if hand_poses or interactions:
         out = draw_hands_and_interactions(out, result)
+    if result.temporal_changes:
+        out = draw_temporal_changes(out, result.temporal_changes)
     if result.vlm:
         out = draw_vlm_text(out, result.vlm)
     return out

@@ -1,17 +1,19 @@
 from __future__ import annotations
 
-from core.base import Detector, Segmenter, VLM
+from core.base import Detector, Segmenter, VLM, Tracker
 
 _REGISTRY: dict[str, dict[str, type]] = {
     "detector": {},
     "segmenter": {},
     "vlm": {},
+    "tracker": {},
 }
 
 CATEGORY_BASE = {
     "detector": Detector,
     "segmenter": Segmenter,
     "vlm": VLM,
+    "tracker": Tracker,
 }
 
 
@@ -36,6 +38,14 @@ def create(category: str, name: str, **kwargs):
     assert name in _REGISTRY[category], \
         f"Not found: {category}/{name}. Available: {list(_REGISTRY[category].keys())}"
     return _REGISTRY[category][name](**kwargs)
+
+
+def get_class(category: str, name: str) -> type:
+    """Return registered class without instantiating."""
+    assert category in _REGISTRY, f"Unknown category: {category}"
+    assert name in _REGISTRY[category], \
+        f"Not found: {category}/{name}. Available: {list(_REGISTRY[category].keys())}"
+    return _REGISTRY[category][name]
 
 
 def list_models(category: str) -> list[str]:
