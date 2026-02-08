@@ -3,7 +3,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 import numpy as np
 
-from core.types import DetectionResult, SegmentationResult, VLMResult
+from core.types import DetectionResult, SegmentationResult, VLMResult, TrackingResult
 
 
 class Detector(ABC):
@@ -47,3 +47,23 @@ class VLM(ABC):
 
     @abstractmethod
     def unload(self) -> None: ...
+
+
+class Tracker(ABC):
+    @abstractmethod
+    def load(self) -> None: ...
+
+    @abstractmethod
+    def update(self, frame: np.ndarray) -> TrackingResult:
+        """Process frame. Maintains internal state across calls."""
+        ...
+
+    @abstractmethod
+    def reset(self) -> None:
+        """Reset tracker state (e.g. for new video)."""
+        ...
+
+    @abstractmethod
+    def unload(self) -> None: ...
+
+

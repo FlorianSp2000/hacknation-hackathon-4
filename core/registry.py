@@ -1,17 +1,19 @@
 from __future__ import annotations
 
-from core.base import Detector, Segmenter, VLM
+from core.base import Detector, Segmenter, VLM, Tracker
 
 _REGISTRY: dict[str, dict[str, type]] = {
     "detector": {},
     "segmenter": {},
     "vlm": {},
+    "tracker": {},
 }
 
 CATEGORY_BASE = {
     "detector": Detector,
     "segmenter": Segmenter,
     "vlm": VLM,
+    "tracker": Tracker,
 }
 
 

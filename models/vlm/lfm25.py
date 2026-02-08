@@ -10,13 +10,27 @@ from core.registry import register
 from core.types import VLMResult
 
 
-DEFAULT_JSON_SCHEMA_PROMPT = """Analyze this frame. Output ONLY valid JSON with this exact schema, no other text:
+GENERIC_JSON_SCHEMA_PROMPT = """Analyze this frame. Output ONLY valid JSON with this exact schema, no other text:
 {
   "objects": [{"name": "str", "state": "str", "bbox_approx": [x1, y1, x2, y2]}],
   "actions": ["str"],
   "scene_type": "str",
   "navigation_relevant": [{"type": "door|obstacle|passage|surface", "state": "open|closed|blocked|clear"}]
 }"""
+
+NAV_STATE_PROMPT = """You are a navigation ground truth labeler for humanoid robots.
+For each door, drawer, handle, cabinet, passage, or obstacle visible in this frame, classify its state.
+
+Output ONLY valid JSON, no other text:
+{"nav_objects": [{"name": "str", "type": "door|drawer|handle|cabinet|passage|obstacle", "state": "open|closed|ajar|blocked|clear|unknown", "interactable": true}]}
+
+Rules:
+- Only include navigation-relevant objects (doors, drawers, handles, cabinets, passages, obstacles)
+- "state" must be exactly one of: open, closed, ajar, blocked, clear, unknown
+- "interactable" means a humanoid could physically interact with it
+- If no navigation objects are visible, return {"nav_objects": []}"""
+
+DEFAULT_JSON_SCHEMA_PROMPT = NAV_STATE_PROMPT
 
 
 @register("vlm", "lfm2.5-vl")
