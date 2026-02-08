@@ -31,11 +31,22 @@ class LFM25VL(VLM):
     def load(self) -> None:
         from transformers import AutoProcessor, AutoModelForImageTextToText
 
-        self._model = AutoModelForImageTextToText.from_pretrained(
-            self.MODEL_ID,
-            device_map="auto",
-            torch_dtype=torch.bfloat16,
-        )
+        if torch.cuda.is_available():
+            # CUDA: let accelerate handle multi-GPU placement
+            self._model = AutoModelForImageTextToText.from_pretrained(
+                self.MODEL_ID,
+                device_map="auto",
+                torch_dtype=torch.bfloat16,
+            )
+        else:
+            # MPS / CPU: device_map="auto" causes disk offload which breaks on MPS.
+            # Load to CPU with float32 (MPS has limited bfloat16 support), then move.
+            # Use CPU — MPS unified memory is too constrained for this model
+            # and accelerate hooks break on MPS with meta-device offloading.
+            self._model = AutoModelForImageTextToText.from_pretrained(
+                self.MODEL_ID,
+                torch_dtype=torch.float32,
+            ).to("cpu")
         self._processor = AutoProcessor.from_pretrained(self.MODEL_ID)
 
     def predict(self, frame: np.ndarray, prompt: str) -> VLMResult:
