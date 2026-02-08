@@ -7,8 +7,8 @@ from time import perf_counter
 
 import numpy as np
 
-from core.base import Detector, Segmenter, VLM, Tracker
-from core.types import FrameResult, StateChange, TemporalChange
+from core.base import Detector, Segmenter, VLM, Tracker, StateClassifier
+from core.types import FrameResult, StateChange, TemporalChange, StateLabel, StateClassificationResult
 from core.video import read_frames
 from pipeline.interactions import InteractionEngine
 
@@ -27,6 +27,7 @@ class Pipeline:
         segmenter: Segmenter | None = None,
         vlm: VLM | None = None,
         tracker: Tracker | None = None,
+        state_classifier: StateClassifier | None = None,
         vlm_prompt: str = "",
         seg_prompt: str = "",
         frame_skip: int = 1,
@@ -39,6 +40,7 @@ class Pipeline:
         self.segmenter = segmenter
         self.vlm = vlm
         self.tracker = tracker
+        self.state_classifier = state_classifier
         self.vlm_prompt = vlm_prompt
         self.seg_prompt = seg_prompt
         self.frame_skip = frame_skip
@@ -80,6 +82,35 @@ class Pipeline:
         result = self.tracker.update(frame)
         result.frame_idx = idx
         return result
+
+    def _run_state_classifier(self, frame, tracking_result, idx):
+        """Run state classifier on tracked bbox crops."""
+        if not tracking_result or not tracking_result.boxes:
+            return StateClassificationResult(labels=[], frame_idx=idx)
+
+        if self.sequential_offload:
+            self.state_classifier.load()
+
+        boxes = [
+            (b.x1, b.y1, b.x2, b.y2, b.track_id)
+            for b in tracking_result.boxes
+        ]
+        classifications = self.state_classifier.classify(frame, boxes)
+
+        labels = []
+        for i, (state, conf) in enumerate(classifications):
+            b = tracking_result.boxes[i]
+            labels.append(StateLabel(
+                track_id=b.track_id,
+                state=state,
+                confidence=conf,
+                bbox=(b.x1, b.y1, b.x2, b.y2),
+            ))
+
+        if self.sequential_offload:
+            self.state_classifier.unload()
+
+        return StateClassificationResult(labels=labels, frame_idx=idx)
 
     def _run_temporal_diff(self, prev_frame: np.ndarray, prev_idx: int,
                            curr_frame: np.ndarray, curr_idx: int) -> TemporalChange:
@@ -184,6 +215,11 @@ class Pipeline:
                         t0 = perf_counter()
                         result.tracking = self._run_tracker(frame, idx)
                         result.timings["tracker"] = perf_counter() - t0
+                    if self.state_classifier and result.tracking:
+                        t0 = perf_counter()
+                        result.state_classification = self._run_state_classifier(
+                            frame, result.tracking, idx)
+                        result.timings["state_classifier"] = perf_counter() - t0
                     if self.segmenter:
                         t0 = perf_counter()
                         result.segmentation = self._run_segmenter(frame, idx)
@@ -219,6 +255,13 @@ class Pipeline:
                         t0 = perf_counter()
                         result.tracking = self._run_tracker(frame, idx)
                         result.timings["tracker"] = perf_counter() - t0
+
+                    # State classifier runs on tracked bboxes (fast, every frame)
+                    if self.state_classifier and result.tracking:
+                        t0 = perf_counter()
+                        result.state_classification = self._run_state_classifier(
+                            frame, result.tracking, idx)
+                        result.timings["state_classifier"] = perf_counter() - t0
 
                     # VLM also sequential (GPU-bound + temporal diff needs ordering)
                     if self.vlm and idx % self.vlm_skip == 0:
