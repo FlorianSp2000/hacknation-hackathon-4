@@ -3,7 +3,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 import numpy as np
 
-from core.types import DetectionResult, SegmentationResult, VLMResult, TrackingResult
+from core.types import DetectionResult, SegmentationResult, VLMResult, TrackingResult, StateClassificationResult
 
 
 class Detector(ABC):
@@ -61,6 +61,26 @@ class Tracker(ABC):
     @abstractmethod
     def reset(self) -> None:
         """Reset tracker state (e.g. for new video)."""
+        ...
+
+    @abstractmethod
+    def unload(self) -> None: ...
+
+
+class StateClassifier(ABC):
+    @abstractmethod
+    def load(self) -> None: ...
+
+    @abstractmethod
+    def classify(self, frame: np.ndarray, boxes: list[tuple]) -> list[tuple[str, float]]:
+        """Classify state of each cropped bbox region.
+
+        Args:
+            frame: BGR numpy (H,W,3)
+            boxes: list of (x1, y1, x2, y2, track_id) tuples
+
+        Returns: list of (state, confidence) pairs, one per box.
+        """
         ...
 
     @abstractmethod

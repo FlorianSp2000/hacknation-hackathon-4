@@ -33,6 +33,7 @@ for key, default in [
     ("segmenter_instance", None),
     ("vlm_instance", None),
     ("tracker_instance", None),
+    ("state_classifier_instance", None),
     ("exported_video", None),
     ("nav_timeline", None),
 ]:
@@ -65,6 +66,14 @@ with st.sidebar:
         tracker_choice = st.selectbox("Tracker Model", tracker_names, index=0)
         tracker_size = st.selectbox("Tracker Model Size", ["n", "s", "m", "l", "x"], index=1,
                                     key="tracker_size")
+
+    # --- State Classifier (default ON for nav) ---
+    st.subheader("State Classifier")
+    use_state_classifier = st.checkbox("Enable State Classifier", value=True,
+                                       help="SigLIP zero-shot state classification on tracked objects (~50ms/crop vs ~10s VLM)")
+    if use_state_classifier:
+        sc_names = list_models("state_classifier")
+        sc_choice = st.selectbox("State Classifier Model", sc_names, index=0)
 
     # --- Detector ---
     st.subheader("Object Detection")
@@ -159,6 +168,15 @@ with st.sidebar:
             else:
                 st.session_state["tracker_instance"] = None
 
+            # State Classifier
+            if use_state_classifier:
+                sc = create("state_classifier", sc_choice)
+                if not sequential_offload:
+                    sc.load()
+                st.session_state["state_classifier_instance"] = sc
+            else:
+                st.session_state["state_classifier_instance"] = None
+
             # Detector
             if use_detector:
                 det = create("detector", det_choice, model_size=det_size)
@@ -192,7 +210,7 @@ with st.sidebar:
 
     if unload_btn:
         for key in ("detector_instance", "segmenter_instance", "vlm_instance",
-                     "tracker_instance"):
+                     "tracker_instance", "state_classifier_instance"):
             inst = st.session_state.get(key)
             if inst is not None:
                 inst.unload()
@@ -207,6 +225,7 @@ with st.sidebar:
     st.caption("Loaded models:")
     for label, key in [
         ("Tracker", "tracker_instance"),
+        ("State Classifier", "state_classifier_instance"),
         ("Detector", "detector_instance"),
         ("Segmenter", "segmenter_instance"),
         ("VLM", "vlm_instance"),
@@ -263,6 +282,7 @@ if uploaded:
             segmenter=st.session_state["segmenter_instance"],
             vlm=st.session_state["vlm_instance"],
             tracker=st.session_state["tracker_instance"],
+            state_classifier=st.session_state["state_classifier_instance"],
             vlm_prompt=vlm_prompt if use_vlm else "",
             seg_prompt=seg_prompt if use_segmenter else "",
             frame_skip=frame_skip,

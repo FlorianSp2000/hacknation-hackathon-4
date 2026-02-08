@@ -88,6 +88,20 @@ class TemporalChange:
 
 
 @dataclass
+class StateLabel:
+    track_id: int
+    state: str  # open/closed/ajar
+    confidence: float  # similarity score
+    bbox: tuple[float, float, float, float] = (0, 0, 0, 0)
+
+
+@dataclass
+class StateClassificationResult:
+    labels: list[StateLabel]
+    frame_idx: int
+
+
+@dataclass
 class ObjectStateEntry:
     frame_start: int
     frame_end: int
@@ -119,6 +133,7 @@ class FrameResult:
     segmentation: SegmentationResult | None = None
     vlm: VLMResult | None = None
     tracking: TrackingResult | None = None
+    state_classification: StateClassificationResult | None = None
     temporal_changes: TemporalChange | None = None
     hand_poses: list[HandPose] = field(default_factory=list)
     interactions: list[Interaction] = field(default_factory=list)

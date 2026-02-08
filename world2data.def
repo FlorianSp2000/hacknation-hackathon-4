@@ -43,7 +43,8 @@ From: nvidia/cuda:12.4.1-runtime-ubuntu22.04
         "mediapipe>=0.10.14" \
         "rfdetr" \
         "onnxruntime" \
-        "streamlit-webrtc>=0.47"
+        "streamlit-webrtc>=0.47" \
+        "lap"
     rm -rf /tmp/build
 
     # Cleanup

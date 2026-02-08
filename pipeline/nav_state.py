@@ -24,6 +24,34 @@ _NAV_RELEVANT_COCO = {
 # VLM nav_object types we care about
 _NAV_TYPES = {"door", "drawer", "handle", "cabinet", "passage", "obstacle"}
 
+# Map YOLO class names to navigation object types
+_CLASS_TO_NAV_TYPE = {
+    "refrigerator": "cabinet",
+    "oven": "cabinet",
+    "microwave": "cabinet",
+    "door": "door",
+    "suitcase": "obstacle",
+    "backpack": "obstacle",
+    "chair": "obstacle",
+    "couch": "obstacle",
+    "bed": "obstacle",
+    "dining table": "obstacle",
+}
+
+
+def _infer_nav_type(class_name: str) -> str:
+    """Infer navigation object type from YOLO class name."""
+    lower = class_name.lower()
+    if lower in _CLASS_TO_NAV_TYPE:
+        return _CLASS_TO_NAV_TYPE[lower]
+    # Check for partial matches
+    for keyword, nav_type in [("door", "door"), ("drawer", "drawer"),
+                               ("cabinet", "cabinet"), ("fridge", "cabinet"),
+                               ("handle", "handle")]:
+        if keyword in lower:
+            return nav_type
+    return "object"
+
 
 def _bbox_iou(box_a: tuple[float, float, float, float],
               box_b: tuple[float, float, float, float]) -> float:
@@ -105,8 +133,8 @@ def _match_vlm_to_tracks(
 def build_nav_timeline(results: list[FrameResult], fps: float = 30.0) -> NavigationTimeline:
     """Build a NavigationTimeline from pipeline results.
 
-    Merges tracked object identities with VLM navigation-state classifications
-    to produce per-object state timelines with transition boundaries.
+    Prefers state_classification (SigLIP, per-frame) over VLM output (sparse).
+    Falls back to VLM when state_classification is not available.
     """
     # Collect raw state observations: track_id -> [(frame_idx, state, name, type)]
     observations: dict[int, list[tuple[int, str, str, str]]] = defaultdict(list)
@@ -120,32 +148,47 @@ def build_nav_timeline(results: list[FrameResult], fps: float = 30.0) -> Navigat
                 if box.track_id >= 0:
                     track_classes[box.track_id] = box.class_name
 
-    # For each frame with VLM output, extract nav objects and match to tracks
-    for r in results:
-        if not r.vlm or not r.vlm.parsed:
-            continue
+    # PRIMARY PATH: Use state_classification (SigLIP) — per-frame, per-tracked-object
+    has_state_classification = any(r.state_classification for r in results)
 
-        nav_objects = r.vlm.parsed.get("nav_objects", [])
-        if not isinstance(nav_objects, list):
-            continue
+    if has_state_classification:
+        for r in results:
+            if not r.state_classification:
+                continue
+            for label in r.state_classification.labels:
+                if label.track_id < 0:
+                    continue
+                yolo_class = track_classes.get(label.track_id, "object")
+                # Use YOLO class as both name and type for CLIP-based classification
+                observations[label.track_id].append(
+                    (r.frame_idx, label.state, yolo_class, _infer_nav_type(yolo_class))
+                )
 
-        # Get tracked boxes for this frame (if tracking enabled)
-        tracked_boxes = r.tracking.boxes if r.tracking else []
+    # FALLBACK: Use VLM output (sparse, only on VLM-processed frames)
+    if not has_state_classification:
+        for r in results:
+            if not r.vlm or not r.vlm.parsed:
+                continue
 
-        if tracked_boxes:
-            matches = _match_vlm_to_tracks(nav_objects, tracked_boxes)
-        else:
-            # No tracking — use synthetic IDs
-            matches = [
-                (obj, -(abs(hash(str(obj.get("name", "")) + str(obj.get("type", "")))) % 10000 + 1))
-                for obj in nav_objects
-            ]
+            nav_objects = r.vlm.parsed.get("nav_objects", [])
+            if not isinstance(nav_objects, list):
+                continue
 
-        for vlm_obj, track_id in matches:
-            state = str(vlm_obj.get("state", "unknown")).lower()
-            name = str(vlm_obj.get("name", "unknown"))
-            obj_type = str(vlm_obj.get("type", "unknown")).lower()
-            observations[track_id].append((r.frame_idx, state, name, obj_type))
+            tracked_boxes = r.tracking.boxes if r.tracking else []
+
+            if tracked_boxes:
+                matches = _match_vlm_to_tracks(nav_objects, tracked_boxes)
+            else:
+                matches = [
+                    (obj, -(abs(hash(str(obj.get("name", "")) + str(obj.get("type", "")))) % 10000 + 1))
+                    for obj in nav_objects
+                ]
+
+            for vlm_obj, track_id in matches:
+                state = str(vlm_obj.get("state", "unknown")).lower()
+                name = str(vlm_obj.get("name", "unknown"))
+                obj_type = str(vlm_obj.get("type", "unknown")).lower()
+                observations[track_id].append((r.frame_idx, state, name, obj_type))
 
     # Build per-object timelines
     nav_objects = []
