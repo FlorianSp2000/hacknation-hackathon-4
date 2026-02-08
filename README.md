@@ -20,6 +20,8 @@ streamlit run app.py
 
 Requires GPU with >=8GB VRAM (sequential offload) or >=16GB (all models loaded).
 
+![Architecture Diagram](docs/architecture_diagram.png)
+
 ## Features
 
 - **Object tracking** with persistent IDs across frames
