@@ -9,7 +9,7 @@ import numpy as np
 import streamlit as st
 
 import models  # triggers registration
-from core.registry import create, list_models
+from core.registry import create, get_class, list_models
 from core.video import get_video_info, export_annotated_video
 from core.types import FrameResult
 from models.vlm.lfm25 import DEFAULT_JSON_SCHEMA_PROMPT
@@ -54,7 +54,9 @@ with st.sidebar:
     if use_detector:
         det_names = list_models("detector")
         det_choice = st.selectbox("Detector Model", det_names, index=0)
-        det_size = st.selectbox("Model Size", ["n", "s", "m", "l", "x"], index=0)
+        det_cls = get_class("detector", det_choice)
+        det_sizes = list(det_cls.VALID_SIZES)
+        det_size = st.selectbox("Model Size", det_sizes, index=0)
 
     # --- Segmenter ---
     st.subheader("Segmentation")
@@ -62,6 +64,11 @@ with st.sidebar:
     if use_segmenter:
         seg_names = list_models("segmenter")
         seg_choice = st.selectbox("Segmenter Model", seg_names, index=0)
+        seg_cls = get_class("segmenter", seg_choice)
+        seg_size = None
+        if hasattr(seg_cls, "VALID_SIZES"):
+            seg_sizes = list(seg_cls.VALID_SIZES)
+            seg_size = st.selectbox("Segmenter Size", seg_sizes, index=0)
         seg_prompt = st.text_input("Segmentation Text Prompt", value="object",
                                    help="Open-vocabulary: what to segment (e.g. 'person', 'door', 'obstacle')")
 
@@ -118,7 +125,8 @@ with st.sidebar:
 
             # Segmenter
             if use_segmenter:
-                seg = create("segmenter", seg_choice)
+                seg_kwargs = {"model_size": seg_size} if seg_size else {}
+                seg = create("segmenter", seg_choice, **seg_kwargs)
                 if not sequential_offload:
                     seg.load()
                 st.session_state["segmenter_instance"] = seg

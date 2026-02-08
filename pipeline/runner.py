@@ -62,6 +62,10 @@ class Pipeline:
         return result
 
     def run(self, video_path: str, max_frames: int | None = None) -> Iterator[FrameResult]:
+        # Reset streaming session for new video (if segmenter supports it)
+        if self.segmenter and hasattr(self.segmenter, "reset_session"):
+            self.segmenter.reset_session()
+
         executor = None if self.sequential_offload else ThreadPoolExecutor(max_workers=3)
 
         try:

@@ -39,7 +39,11 @@ From: nvidia/cuda:12.4.1-runtime-ubuntu22.04
         "opencv-python>=4.8" \
         "numpy>=1.24" \
         "Pillow>=10.0" \
-        "accelerate"
+        "accelerate" \
+        "mediapipe>=0.10.14" \
+        "rfdetr" \
+        "onnxruntime" \
+        "streamlit-webrtc>=0.47"
     rm -rf /tmp/build
 
     # Cleanup
