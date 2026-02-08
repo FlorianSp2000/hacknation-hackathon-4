@@ -157,8 +157,12 @@ def _overlay_vlm_summary(frame, parsed: dict | None, raw_text: str, latency_s: f
     x0 = w - panel_w - 10
     y0 = 10
     y1 = min(h - 10, 300)
-    cv2.rectangle(out, (x0, y0), (w - 10, y1), (20, 20, 20), -1)
-    cv2.rectangle(out, (x0, y0), (w - 10, y1), (80, 80, 80), 1)
+    x1 = w - 10
+    # Draw a light, semi-transparent panel to keep the live feed visible.
+    overlay = out.copy()
+    cv2.rectangle(overlay, (x0, y0), (x1, y1), (245, 245, 245), -1)
+    cv2.addWeighted(overlay, 0.35, out, 0.65, 0.0, out)
+    cv2.rectangle(out, (x0, y0), (x1, y1), (170, 170, 170), 1)
 
     lines = []
     header = "LFM state/action"
@@ -166,6 +170,7 @@ def _overlay_vlm_summary(frame, parsed: dict | None, raw_text: str, latency_s: f
         header += f" ({latency_s * 1000:.0f} ms)"
     lines.append(header)
 
+    added_content = False
     if parsed and isinstance(parsed, dict):
         objects = parsed.get("objects", [])
         if isinstance(objects, list):
@@ -182,12 +187,21 @@ def _overlay_vlm_summary(frame, parsed: dict | None, raw_text: str, latency_s: f
                 lines.append(f"- {name}: {state}")
                 if act:
                     lines.append(f"  actions: {act}")
-    elif raw_text:
+                added_content = True
+
+        # If parsed exists but doesn't contain object rows, still show something useful.
+        if not added_content:
+            if "error" in parsed:
+                lines.append(f"error: {parsed.get('error')}")
+            elif "message" in parsed:
+                lines.append(str(parsed.get("message"))[:180])
+
+    if not added_content and raw_text:
         lines.append(raw_text[:180])
 
     y = y0 + 22
     for line in lines[:12]:
-        cv2.putText(out, line[:70], (x0 + 8, y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (230, 230, 230), 1)
+        cv2.putText(out, line[:70], (x0 + 8, y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (20, 20, 20), 1)
         y += 18
 
     return out
@@ -285,10 +299,37 @@ class LiveVideoProcessor(VideoProcessorBase):
         if self.vlm is not None and (self._frame_count % max(1, int(self.vlm_interval)) == 0):
             prompt = _build_live_prompt(classes_seen)
             t0 = time.perf_counter()
-            vlm_result = self.vlm.predict(run_img, prompt)
-            self._last_vlm_latency_s = time.perf_counter() - t0
-            self._last_vlm_raw = vlm_result.raw_text
-            self._last_vlm_parsed = vlm_result.parsed
+            try:
+                vlm_result = self.vlm.predict(run_img, prompt)
+                self._last_vlm_latency_s = time.perf_counter() - t0
+                raw_text = (vlm_result.raw_text or "").strip()
+                parsed = vlm_result.parsed
+                if not raw_text and not parsed:
+                    # Retry once with a tiny deterministic prompt.
+                    retry_prompt = (
+                        'Return ONLY valid JSON: {"objects":[{"name":"str","state":"str","robot_actions":["str"]}]}'
+                    )
+                    vlm_result_retry = self.vlm.predict(run_img, retry_prompt)
+                    raw_text = (vlm_result_retry.raw_text or "").strip()
+                    parsed = vlm_result_retry.parsed
+                if not raw_text and not parsed:
+                    model_name = type(self.vlm).__name__
+                    # Final fallback: synthesize minimal structured output from detector classes.
+                    objects = [
+                        {"name": c, "state": "unknown", "robot_actions": []}
+                        for c in sorted(set(classes_seen))[:8]
+                    ]
+                    fallback = {"objects": objects, "error": "empty_vlm_output", "model": model_name}
+                    self._last_vlm_raw = json.dumps(fallback, ensure_ascii=False)
+                    self._last_vlm_parsed = fallback
+                else:
+                    self._last_vlm_raw = raw_text or json.dumps(parsed, ensure_ascii=False)
+                    self._last_vlm_parsed = parsed
+            except Exception as exc:  # keep live overlay informative instead of silent blank
+                self._last_vlm_latency_s = time.perf_counter() - t0
+                model_name = type(self.vlm).__name__
+                self._last_vlm_raw = f"VLM error ({model_name}): {exc}"
+                self._last_vlm_parsed = {"error": str(exc), "model": model_name}
 
         if self.vlm is not None:
             img = _overlay_vlm_summary(img, self._last_vlm_parsed, self._last_vlm_raw, self._last_vlm_latency_s)

@@ -114,6 +114,24 @@ def _normalize_generated_text(output: Any) -> str:
             value = output.get(key)
             if isinstance(value, str):
                 return value.strip()
+        choices = output.get("choices")
+        if isinstance(choices, list):
+            parts: list[str] = []
+            for choice in choices:
+                if isinstance(choice, dict):
+                    # OpenAI-style chat shape.
+                    msg = choice.get("message")
+                    if isinstance(msg, dict):
+                        content = msg.get("content")
+                        if isinstance(content, str) and content.strip():
+                            parts.append(content.strip())
+                            continue
+                    for key in ("text", "content"):
+                        value = choice.get(key)
+                        if isinstance(value, str) and value.strip():
+                            parts.append(value.strip())
+            if parts:
+                return "\n".join(parts).strip()
     for attr in ("text", "output", "response", "generated_text"):
         value = getattr(output, attr, None)
         if isinstance(value, str):
@@ -368,19 +386,19 @@ class LFM25VLMLX(VLM):
         # Keep exactly one placeholder for one image.
         clean_prompt = _normalize_mlx_prompt(prompt)
 
-        def _gen(img: Image.Image):
+        def _gen(img: Image.Image, text_prompt: str, *, max_tokens: int | None = None, temperature: float = 0.1):
             return generate(
                 self._model,
                 self._processor,
-                clean_prompt,
+                text_prompt,
                 image=img,
-                max_tokens=self.max_new_tokens,
-                temperature=0.1,
+                max_tokens=max_tokens if max_tokens is not None else self.max_new_tokens,
+                temperature=temperature,
                 repetition_penalty=1.05,
             )
 
         try:
-            output = _gen(pil_image.convert("RGB"))
+            output = _gen(pil_image.convert("RGB"), clean_prompt)
         except ValueError as exc:
             msg = str(exc)
             is_mismatch = "Image features and image tokens do not match" in msg
@@ -395,7 +413,7 @@ class LFM25VLMLX(VLM):
             output = None
             for candidate in candidates:
                 try:
-                    output = _gen(candidate)
+                    output = _gen(candidate, clean_prompt)
                     last_exc = None
                     break
                 except ValueError as inner_exc:
@@ -406,6 +424,21 @@ class LFM25VLMLX(VLM):
                 raise last_exc
 
         raw_text = _normalize_generated_text(output)
+
+        # Some MLX runs can return empty text without raising; retry once with a shorter, deterministic prompt.
+        if not raw_text:
+            fallback_prompt = _normalize_mlx_prompt(
+                "Return ONLY valid JSON with this schema: "
+                '{"objects":[{"name":"str","state":"str","robot_actions":["str"]}]}.'
+            )
+            fallback_img = _resize_square_for_mlx_vlm(pil_image, 336)
+            try:
+                fallback_output = _gen(fallback_img, fallback_prompt, max_tokens=min(self.max_new_tokens, 192), temperature=0.0)
+                raw_text = _normalize_generated_text(fallback_output)
+            except Exception:
+                # Preserve empty output; caller/UI now surfaces explicit empty-output diagnostics.
+                pass
+
         return VLMResult(raw_text=raw_text, parsed=_parse_json(raw_text), frame_idx=-1)
 
     def unload(self) -> None:

@@ -160,6 +160,22 @@ class Pipeline:
             if self.sequential_offload:
                 self.vlm.load()
             result = self.vlm.predict(frame, self.vlm_prompt)
+            if result is None or (not (result.raw_text or "").strip() and not result.parsed):
+                # Retry once with a simpler deterministic prompt to reduce empty generations.
+                fallback_prompt = (
+                    'Return ONLY valid JSON: {"objects":[{"name":"str","state":"str","robot_actions":["str"]}]}'
+                )
+                result = self.vlm.predict(frame, fallback_prompt)
+            if (
+                result is None
+                or (not (result.raw_text or "").strip() and not result.parsed)
+            ):
+                model_name = type(self.vlm).__name__ if self.vlm is not None else "unknown_vlm"
+                result = VLMResult(
+                    raw_text=f"VLM returned empty output ({model_name})",
+                    parsed={"error": "empty_vlm_output", "model": model_name},
+                    frame_idx=idx,
+                )
             result.frame_idx = idx
             return result
         except Exception as exc:
