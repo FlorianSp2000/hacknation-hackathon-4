@@ -1,0 +1,56 @@
+Bootstrap: docker
+From: nvcr.io/nvidia/tensorrt:24.12-py3
+
+%post
+    set -e
+    export DEBIAN_FRONTEND=noninteractive
+
+    apt-get update
+    apt-get install -y \
+        git curl wget ca-certificates \
+        libgl1 libglib2.0-0 libsm6 libxrender1 libxext6 \
+        ffmpeg
+
+    # Install uv for fast dependency resolution
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    export PATH="/root/.local/bin:$PATH"
+
+    # Create app venv using system python (3.12 ships with TRT image)
+    uv venv /opt/venv --python python3
+    export VIRTUAL_ENV=/opt/venv
+    export PATH="/opt/venv/bin:$PATH"
+
+    # PyTorch with CUDA 12.4 (TRT image ships CUDA 12.x)
+    uv pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
+
+    # TensorRT is pre-installed system-wide; expose to venv
+    uv pip install tensorrt
+
+    # App dependencies (onnxruntime-gpu instead of onnxruntime for TRT EP)
+    uv pip install \
+        "streamlit>=1.30" \
+        "transformers @ git+https://github.com/huggingface/transformers@2a5ba8b53d298ed8421e09831bf96bb6d056a24d" \
+        "ultralytics>=8.0" \
+        "opencv-python>=4.8" \
+        "numpy>=1.24" \
+        "Pillow>=10.0" \
+        "accelerate" \
+        "mediapipe>=0.10.14" \
+        "rfdetr" \
+        "onnxruntime-gpu" \
+        "streamlit-webrtc>=0.47"
+    rm -rf /tmp/build
+
+    # Cleanup
+    apt-get clean
+    rm -rf /var/lib/apt/lists/* /root/.cache
+
+%environment
+    export PATH="/opt/venv/bin:$PATH"
+    export VIRTUAL_ENV=/opt/venv
+    export PYTHONPATH=/app:$PYTHONPATH
+    export HF_HOME=/app/cache/huggingface
+    export TORCH_HOME=/app/cache/torch
+
+%runscript
+    exec python -m streamlit run /app/app.py --server.port=8501 --server.address=0.0.0.0 "$@"

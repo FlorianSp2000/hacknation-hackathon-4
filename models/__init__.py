@@ -5,3 +5,4 @@ import models.segmentation.rfdetr_seg
 import models.segmentation.sam3
 import models.segmentation.fastsam
 import models.vlm.lfm25
+import models.tracking.yolo_tracker
