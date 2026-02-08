@@ -25,10 +25,21 @@ for key, default in [
     ("detector_instance", None),
     ("segmenter_instance", None),
     ("vlm_instance", None),
+    ("exported_video", None),
 ]:
     if key not in st.session_state:
         st.session_state[key] = default
 
+
+# --- Display size CSS ---
+fullscreen = st.checkbox("Fullscreen images", value=False)
+if not fullscreen:
+    st.markdown(
+        """<style>
+        img, video { max-height: 500px !important; object-fit: contain !important; }
+        </style>""",
+        unsafe_allow_html=True,
+    )
 
 # ============================================================
 # SIDEBAR
@@ -255,11 +266,16 @@ if uploaded:
             with st.spinner("Rendering video..."):
                 out_path = Path(tempfile.mktemp(suffix=".mp4"))
                 export_annotated_video(results, out_path, info["fps"] / frame_skip, draw_all)
+                video_bytes = out_path.read_bytes()
+                st.session_state["exported_video"] = video_bytes
+                out_path.unlink(missing_ok=True)
 
-                with open(out_path, "rb") as f:
-                    st.download_button(
-                        "Download MP4",
-                        f.read(),
-                        file_name="annotated_output.mp4",
-                        mime="video/mp4",
-                    )
+        # Show video player + download if export exists
+        if st.session_state["exported_video"] is not None:
+            st.video(st.session_state["exported_video"], format="video/mp4")
+            st.download_button(
+                "Download MP4",
+                st.session_state["exported_video"],
+                file_name="annotated_output.mp4",
+                mime="video/mp4",
+            )
