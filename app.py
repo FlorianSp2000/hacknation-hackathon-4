@@ -14,6 +14,7 @@ from core.video import get_video_info, export_annotated_video
 from core.types import FrameResult
 from models.vlm.lfm25 import DEFAULT_JSON_SCHEMA_PROMPT
 from pipeline.runner import Pipeline
+from pipeline.interactions import InteractionConfig, InteractionEngine
 from pipeline.visualizer import draw_detections, draw_segmentation, draw_vlm_text, draw_all
 
 st.set_page_config(layout="wide", page_title="World2Data — Multi-Model Video Inference")
@@ -71,6 +72,19 @@ with st.sidebar:
         vlm_names = list_models("vlm")
         vlm_choice = st.selectbox("VLM Model", vlm_names, index=0)
         vlm_prompt = st.text_area("VLM Prompt", value=DEFAULT_JSON_SCHEMA_PROMPT, height=150)
+
+    # --- Optional interactions ---
+    max_hands = 2
+    contact_threshold = 0.2
+    st.subheader("Interactions (Optional)")
+    use_interactions = st.checkbox(
+        "Enable hand-object interactions",
+        value=False,
+        help="Uses MediaPipe Hands and links hands to any detected object boxes.",
+    )
+    if use_interactions:
+        max_hands = st.slider("Max hands", 1, 4, 2)
+        contact_threshold = st.slider("Contact threshold", 0.05, 0.95, 0.2, 0.05)
 
     # --- Pipeline settings ---
     st.subheader("Pipeline Settings")
@@ -168,6 +182,21 @@ if uploaded:
                         disabled=not st.session_state["models_loaded"])
 
     if run_btn:
+        interaction_engine = None
+        if use_interactions:
+            interaction_engine = InteractionEngine(
+                InteractionConfig(
+                    enabled=True,
+                    max_hands=max_hands,
+                    contact_threshold=contact_threshold,
+                )
+            )
+            if not interaction_engine.available:
+                detail = f" ({interaction_engine.error})" if interaction_engine.error else ""
+                st.warning(
+                    "MediaPipe interactions requested but unavailable." + detail
+                )
+
         pipeline = Pipeline(
             detector=st.session_state["detector_instance"],
             segmenter=st.session_state["segmenter_instance"],
@@ -177,6 +206,7 @@ if uploaded:
             frame_skip=frame_skip,
             vlm_skip=vlm_skip,
             sequential_offload=sequential_offload,
+            interaction_engine=interaction_engine,
         )
 
         results: list[FrameResult] = []
@@ -205,12 +235,34 @@ if uploaded:
         st.divider()
         st.subheader("Results Viewer")
 
+        # Timing summary across processed frames
+        timing_keys = sorted({k for r in results for k in r.timings.keys()})
+        if timing_keys:
+            st.caption("Inference timing (seconds)")
+            timing_rows = []
+            for key in timing_keys:
+                vals = [r.timings[key] for r in results if key in r.timings]
+                if vals:
+                    timing_rows.append(
+                        {
+                            "stage": key,
+                            "mean_s": float(np.mean(vals)),
+                            "p95_s": float(np.percentile(vals, 95)),
+                            "max_s": float(np.max(vals)),
+                        }
+                    )
+            if timing_rows:
+                timing_rows = sorted(timing_rows, key=lambda x: x["mean_s"], reverse=True)
+                st.dataframe(timing_rows, use_container_width=True, hide_index=True)
+
         frame_idx = st.slider("Frame", 0, len(results) - 1, 0,
                                format=f"Frame %d / {len(results) - 1}")
         r = results[frame_idx]
+        hand_poses = getattr(r, "hand_poses", [])
+        interactions = getattr(r, "interactions", [])
 
-        tab_orig, tab_det, tab_seg, tab_combined, tab_vlm = st.tabs(
-            ["Original", "Detections", "Segmentation", "Combined", "VLM Output"]
+        tab_orig, tab_det, tab_seg, tab_inter, tab_combined, tab_vlm = st.tabs(
+            ["Original", "Detections", "Segmentation", "Interactions", "Combined", "VLM Output"]
         )
 
         with tab_orig:
@@ -240,10 +292,46 @@ if uploaded:
             else:
                 st.info("No segmentation results for this frame.")
 
+        with tab_inter:
+            if hand_poses:
+                st.write(f"Hands: {len(hand_poses)}")
+                st.dataframe(
+                    [
+                        {
+                            "hand_id": h.hand_id,
+                            "handedness": h.handedness,
+                            "score": f"{h.score:.3f}",
+                            "bbox": f"{h.bbox}",
+                        }
+                        for h in hand_poses
+                    ]
+                )
+            else:
+                st.info("No hands detected for this frame.")
+
+            if interactions:
+                st.write("Interactions:")
+                st.dataframe(
+                    [
+                        {
+                            "relation": inter.relation,
+                            "hand": inter.hand_id,
+                            "target": f"{inter.target_class}[{inter.target_index}]",
+                            "contact_score": f"{inter.contact_score:.3f}",
+                        }
+                        for inter in interactions
+                    ]
+                )
+            else:
+                st.info("No interactions found for this frame.")
+
         with tab_combined:
             vis = draw_all(r.frame, r)
             st.image(cv2.cvtColor(vis, cv2.COLOR_BGR2RGB),
                      caption=f"Combined — Frame {r.frame_idx}", use_container_width=True)
+            if r.timings:
+                st.caption("Per-frame timing (seconds)")
+                st.json({k: round(v, 4) for k, v in r.timings.items()})
 
         with tab_vlm:
             if r.vlm:

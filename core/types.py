@@ -42,9 +42,30 @@ class VLMResult:
 
 
 @dataclass
+class HandPose:
+    hand_id: str
+    handedness: str
+    score: float
+    bbox: tuple[int, int, int, int]
+    keypoints: list[tuple[int, int]]
+
+
+@dataclass
+class Interaction:
+    hand_id: str
+    target_class: str
+    target_index: int
+    contact_score: float
+    relation: str = "touching"
+
+
+@dataclass
 class FrameResult:
     frame_idx: int
     frame: np.ndarray
     detection: DetectionResult | None = None
     segmentation: SegmentationResult | None = None
     vlm: VLMResult | None = None
+    hand_poses: list[HandPose] = field(default_factory=list)
+    interactions: list[Interaction] = field(default_factory=list)
+    timings: dict[str, float] = field(default_factory=dict)

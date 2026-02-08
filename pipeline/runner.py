@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from typing import Iterator
+from time import perf_counter
 
 from core.base import Detector, Segmenter, VLM
 from core.types import FrameResult
 from core.video import read_frames
+from pipeline.interactions import InteractionEngine
 
 
 class Pipeline:
@@ -18,6 +20,7 @@ class Pipeline:
         frame_skip: int = 1,
         vlm_skip: int = 5,
         sequential_offload: bool = False,
+        interaction_engine: InteractionEngine | None = None,
     ):
         self.detector = detector
         self.segmenter = segmenter
@@ -27,6 +30,7 @@ class Pipeline:
         self.frame_skip = frame_skip
         self.vlm_skip = vlm_skip
         self.sequential_offload = sequential_offload
+        self.interaction_engine = interaction_engine
 
     def _run_detector(self, frame, idx):
         if self.sequential_offload:
@@ -57,19 +61,39 @@ class Pipeline:
         return result
 
     def run(self, video_path: str, max_frames: int | None = None) -> Iterator[FrameResult]:
-        for idx, frame in read_frames(video_path, max_frames):
-            if idx % self.frame_skip != 0:
-                continue
+        try:
+            for idx, frame in read_frames(video_path, max_frames):
+                if idx % self.frame_skip != 0:
+                    continue
 
-            result = FrameResult(frame_idx=idx, frame=frame)
+                frame_start = perf_counter()
+                result = FrameResult(frame_idx=idx, frame=frame)
 
-            if self.detector:
-                result.detection = self._run_detector(frame, idx)
+                if self.detector:
+                    t0 = perf_counter()
+                    result.detection = self._run_detector(frame, idx)
+                    result.timings["detector"] = perf_counter() - t0
 
-            if self.segmenter:
-                result.segmentation = self._run_segmenter(frame, idx)
+                if self.interaction_engine:
+                    t0 = perf_counter()
+                    hands, interactions = self.interaction_engine.process(frame, result.detection)
+                    result.hand_poses = hands
+                    result.interactions = interactions
+                    result.timings["interactions"] = perf_counter() - t0
 
-            if self.vlm and idx % self.vlm_skip == 0:
-                result.vlm = self._run_vlm(frame, idx)
+                if self.segmenter:
+                    t0 = perf_counter()
+                    result.segmentation = self._run_segmenter(frame, idx)
+                    result.timings["segmenter"] = perf_counter() - t0
 
-            yield result
+                if self.vlm and idx % self.vlm_skip == 0:
+                    t0 = perf_counter()
+                    result.vlm = self._run_vlm(frame, idx)
+                    result.timings["vlm"] = perf_counter() - t0
+
+                result.timings["frame_total"] = perf_counter() - frame_start
+
+                yield result
+        finally:
+            if self.interaction_engine:
+                self.interaction_engine.close()

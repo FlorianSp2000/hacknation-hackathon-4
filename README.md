@@ -1,63 +1,66 @@
-# World2Data
+# World2Data — Multi-Model Video Inference Pipeline
 
-This repo currently contains two related toolchains:
+AI-powered ground truth generation from raw video. Feeds frames through detection, segmentation, and vision-language models to produce structured, navigation-relevant annotations.
 
-1. `world2data_cam` CLI (`src/world2data_cam`) for webcam/video capture, frame export, detection/tracking, hand-contact, and door-state signals.
-2. A multi-model pipeline app (remote project files under `core/`, `models/`, `pipeline/`, `app.py`) for detection + segmentation + VLM workflows.
+## Models
 
-## Quick Start (CLI)
+| Type | Model | Package |
+|---|---|---|
+| Detection | YOLOv8, YOLO11 | `ultralytics` |
+| Segmentation | SAM 3 (text-prompted) | `transformers` |
+| Vision-Language | LFM2.5-VL-1.6B-8bit (`mlx-community/...`) | `mlx-vlm` (preferred), `transformers` (fallback) |
 
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-PYTHONPATH=src python -m world2data_cam hands_contact --help
-```
-
-## Quick Start (Remote App)
+## Quick Start
 
 ```bash
 uv sync
 streamlit run app.py
 ```
 
-## Model Notes
-
-- Detection: YOLO (`ultralytics`)
-- Segmentation: SAM 3
-- VLM: LFM2.5
-- Hand pipeline: MediaPipe Hands
-
-## Common CLI flows
-
-Record:
+If `uv` is not installed, use `pip`:
 
 ```bash
-PYTHONPATH=src python -m world2data_cam record --camera 0 --out recordings/session.mp4 --fps 30 --width 1280 --height 720
+python -m venv .venv
+source .venv/bin/activate
+pip install -e .
+streamlit run app.py
 ```
 
-Hands + contact + optional W2D update:
+Requires GPU with >=8GB VRAM (sequential offload) or >=12GB (all models loaded).
 
-```bash
-PYTHONPATH=src python -m world2data_cam hands_contact \
-  --video input/open-door.mp4 \
-  --out outputs/open-door_hands \
-  --fps 10 \
-  --handle-roi "280,330,380,470" \
-  --w2d frames/session/world2data_stub.json
+## Architecture
+
+```
+core/       — types, ABCs, registry, video I/O
+models/     — one file per model variant, registered via @register
+pipeline/   — orchestration (runner.py) + visualization (visualizer.py)
+app.py      — Streamlit UI
 ```
 
-Door state from ROI:
+## Adding a Model
 
-```bash
-PYTHONPATH=src python -m world2data_cam hands_contact \
-  --video input/open-door.mp4 \
-  --out outputs/open-door_hands \
-  --fps 10 \
-  --handle-roi "280,330,380,470" \
-  --door-roi "430,120,860,560" \
-  --door-baseline-seconds 2.0 \
-  --door-smooth-alpha 0.2 \
-  --door-ajar-on 0.08 --door-ajar-off 0.05 \
-  --door-open-on 0.16 --door-open-off 0.10
+1. Create `models/<category>/<name>.py`
+2. Implement the ABC (`Detector`, `Segmenter`, or `VLM`) with `load()`, `predict()`, `unload()`
+3. Decorate with `@register("category", "name")` and import in `models/__init__.py`
+
+```python
+from core.base import Detector
+from core.registry import register
+
+@register("detector", "my-detector")
+class MyDetector(Detector):
+    def load(self): ...
+    def predict(self, frame): ...
+    def unload(self): ...
 ```
+
+## Adding a Modality
+
+1. Add dataclass to `core/types.py`, add field to `FrameResult`
+2. Create ABC in `core/base.py`, add to `CATEGORY_BASE` in `core/registry.py`
+3. Wire into `pipeline/runner.py` and `pipeline/visualizer.py`
+4. Add UI controls in `app.py`
+
+## Cluster Deployment
+
+See [CLAUDE.md](CLAUDE.md) for Singularity container + SLURM setup.

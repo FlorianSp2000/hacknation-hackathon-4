@@ -11,6 +11,9 @@ dependencies = [
     "numpy>=1.24",
     "Pillow>=10.0",
     "accelerate",
+    "mediapipe>=0.10.14",
+    "mlx>=0.20.0",
+    "mlx-vlm>=0.0.13",
 ]
 
 [dependency-groups]

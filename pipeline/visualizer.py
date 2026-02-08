@@ -58,12 +58,47 @@ def draw_vlm_text(frame: np.ndarray, vlm: VLMResult) -> np.ndarray:
     return out
 
 
+def draw_hands_and_interactions(frame: np.ndarray, result: FrameResult) -> np.ndarray:
+    out = frame.copy()
+    hand_poses = getattr(result, "hand_poses", [])
+    interactions = getattr(result, "interactions", [])
+
+    # Hands
+    for hand in hand_poses:
+        x1, y1, x2, y2 = hand.bbox
+        cv2.rectangle(out, (x1, y1), (x2, y2), (255, 180, 0), 2)
+        cv2.putText(
+            out,
+            f"{hand.hand_id} {hand.handedness} {hand.score:.2f}",
+            (x1, max(15, y1 - 6)),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.45,
+            (255, 180, 0),
+            1,
+        )
+        for x, y in hand.keypoints:
+            cv2.circle(out, (x, y), 2, (0, 140, 255), -1)
+
+    # Interactions
+    y = 20
+    for inter in interactions:
+        text = f"{inter.hand_id} -> {inter.target_class}[{inter.target_index}] ({inter.contact_score:.2f})"
+        cv2.putText(out, text, (10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (80, 255, 80), 1)
+        y += 18
+
+    return out
+
+
 def draw_all(frame: np.ndarray, result: FrameResult) -> np.ndarray:
     out = frame.copy()
+    hand_poses = getattr(result, "hand_poses", [])
+    interactions = getattr(result, "interactions", [])
     if result.segmentation:
         out = draw_segmentation(out, result.segmentation)
     if result.detection:
         out = draw_detections(out, result.detection)
+    if hand_poses or interactions:
+        out = draw_hands_and_interactions(out, result)
     if result.vlm:
         out = draw_vlm_text(out, result.vlm)
     return out
