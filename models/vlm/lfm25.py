@@ -46,11 +46,18 @@ class LFM25VL(VLM):
 
         from transformers import AutoProcessor, AutoModelForImageTextToText
 
-        self._model = AutoModelForImageTextToText.from_pretrained(
-            self.FALLBACK_MODEL_ID,
-            device_map="auto",
-            torch_dtype=torch.bfloat16,
-        )
+        if torch.cuda.is_available():
+            self._model = AutoModelForImageTextToText.from_pretrained(
+                self.FALLBACK_MODEL_ID,
+                device_map="auto",
+                torch_dtype=torch.bfloat16,
+            )
+        else:
+            # Avoid accelerate auto device mapping issues on non-CUDA systems.
+            self._model = AutoModelForImageTextToText.from_pretrained(
+                self.FALLBACK_MODEL_ID,
+                torch_dtype=torch.float32,
+            ).to("cpu")
         self._processor = AutoProcessor.from_pretrained(self.FALLBACK_MODEL_ID)
         self._backend = "transformers"
 
