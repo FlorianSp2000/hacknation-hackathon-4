@@ -19,6 +19,7 @@ dependencies = [
     "streamlit-webrtc>=0.47",
     "lap>=0.5.12",
     "sentencepiece",
+    "google-generativeai>=0.8.5",
 ]
 
 [dependency-groups]

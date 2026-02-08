@@ -69,8 +69,8 @@ def _init_state() -> None:
         "live_state_classifier": None,
         "live_trk_name": "bytetrack",
         "live_seg_name": "rf-detr-seg",
-        "live_det_name": "yolov8",
-        "live_vlm_name": "lfm2.5-vl",
+        "live_det_name": "yolov11",
+        "live_vlm_name": "gemini3",
         "live_state_classifier_name": "siglip",
         "live_loaded": False,
         "live_auto_loaded": False,
@@ -1359,9 +1359,9 @@ with st.sidebar:
     det_kwargs = _pick_model_size("detector", det_choice, "Detector Size") if enable_det else {}
 
     st.divider()
-    enable_vlm = st.checkbox("Enable Liquid LFM", value=True)
+    enable_vlm = st.checkbox("Enable VLM", value=True)
     vlm_names = list_models("vlm")
-    preferred = "lfm2.5-vl" if "lfm2.5-vl" in vlm_names else vlm_names[0]
+    preferred = "gemini3" if "gemini3" in vlm_names else vlm_names[0]
     vlm_default = vlm_names.index(st.session_state["live_vlm_name"]) if st.session_state["live_vlm_name"] in vlm_names else vlm_names.index(preferred)
     vlm_choice = st.selectbox("VLM", vlm_names, index=vlm_default, disabled=not enable_vlm)
     prompt_mode = st.selectbox("Prompt Mode", ["Navigation (focused)", "Generic (broad)"], index=0, disabled=not enable_vlm)

@@ -128,7 +128,8 @@ with st.sidebar:
     use_vlm = st.checkbox("Enable VLM", value=True)
     if use_vlm:
         vlm_names = list_models("vlm")
-        vlm_choice = st.selectbox("VLM Model", vlm_names, index=0)
+        preferred_vlm = "gemini3" if "gemini3" in vlm_names else vlm_names[0]
+        vlm_choice = st.selectbox("VLM Model", vlm_names, index=vlm_names.index(preferred_vlm))
         prompt_mode = st.selectbox("Prompt Mode", ["Navigation (focused)", "Generic (broad)"], index=0)
         if prompt_mode == "Navigation (focused)":
             vlm_prompt = st.text_area("VLM Prompt", value=NAV_STATE_PROMPT, height=200)
