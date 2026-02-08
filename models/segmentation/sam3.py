@@ -19,16 +19,25 @@ class SAM3Segmenter(Segmenter):
         self._model = None
         self._processor = None
         self._device = None
+        self._dtype = None
         self._session = None
         self._session_prompt = None
 
     def load(self) -> None:
         from transformers import Sam3VideoProcessor, Sam3VideoModel
 
-        self._device = "cuda" if torch.cuda.is_available() else "cpu"
+        if torch.cuda.is_available():
+            self._device = "cuda"
+            self._dtype = torch.bfloat16
+        elif torch.backends.mps.is_available():
+            self._device = "mps"
+            self._dtype = torch.float32
+        else:
+            self._device = "cpu"
+            self._dtype = torch.float32
         self._model = Sam3VideoModel.from_pretrained(
             "facebook/sam3",
-        ).to(self._device, dtype=torch.bfloat16)
+        ).to(self._device, dtype=self._dtype)
         self._processor = Sam3VideoProcessor.from_pretrained("facebook/sam3")
 
     def _init_session(self, text_prompt: str) -> None:
@@ -37,7 +46,7 @@ class SAM3Segmenter(Segmenter):
             inference_device=self._device,
             processing_device="cpu",
             video_storage_device="cpu",
-            dtype=torch.bfloat16,
+            dtype=self._dtype,
         )
         self._session = self._processor.add_text_prompt(
             inference_session=self._session,

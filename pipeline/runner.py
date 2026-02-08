@@ -6,10 +6,11 @@ from dataclasses import dataclass
 from time import perf_counter
 from typing import Iterator
 
+import cv2
 import numpy as np
 
 from core.base import Detector, Segmenter, Tracker, VLM
-from core.types import BBox, FrameResult, Mask, SegmentationResult, StateChange, TemporalChange
+from core.types import BBox, FrameResult, Mask, SegmentationResult, StateChange, TemporalChange, VLMResult
 from core.video import read_frames
 from pipeline.interactions import InteractionEngine
 
@@ -83,6 +84,7 @@ class Pipeline:
         seg_resegment_iou: float = 0.7,
         seg_min_box_area: int = 64,
         enable_temporal_diff: bool = False,
+        inference_max_side: int | None = None,
     ):
         self.detector = detector
         self.segmenter = segmenter
@@ -100,8 +102,21 @@ class Pipeline:
         self.seg_resegment_iou = seg_resegment_iou
         self.seg_min_box_area = max(1, seg_min_box_area)
         self.enable_temporal_diff = enable_temporal_diff
+        self.inference_max_side = inference_max_side if (inference_max_side and inference_max_side > 0) else None
         self._tracks: dict[int, _TrackState] = {}
         self._next_track_id = 1
+
+    def _prepare_frame(self, frame: np.ndarray) -> np.ndarray:
+        if not self.inference_max_side:
+            return frame
+        h, w = frame.shape[:2]
+        max_side = max(h, w)
+        if max_side <= self.inference_max_side:
+            return frame
+        scale = float(self.inference_max_side) / float(max_side)
+        new_w = max(1, int(round(w * scale)))
+        new_h = max(1, int(round(h * scale)))
+        return cv2.resize(frame, (new_w, new_h), interpolation=cv2.INTER_AREA)
 
     def _run_detector(self, frame, idx):
         if self.sequential_offload:
@@ -122,14 +137,28 @@ class Pipeline:
         return result
 
     def _run_vlm(self, frame, idx):
-        assert self.vlm_prompt, "VLM requires a prompt"
-        if self.sequential_offload:
-            self.vlm.load()
-        result = self.vlm.predict(frame, self.vlm_prompt)
-        result.frame_idx = idx
-        if self.sequential_offload:
-            self.vlm.unload()
-        return result
+        if not self.vlm_prompt:
+            return VLMResult(
+                raw_text="VLM disabled: empty prompt",
+                parsed={"error": "empty_prompt"},
+                frame_idx=idx,
+            )
+
+        try:
+            if self.sequential_offload:
+                self.vlm.load()
+            result = self.vlm.predict(frame, self.vlm_prompt)
+            result.frame_idx = idx
+            return result
+        except Exception as exc:
+            return VLMResult(
+                raw_text=f"VLM inference error: {exc}",
+                parsed={"error": str(exc)},
+                frame_idx=idx,
+            )
+        finally:
+            if self.sequential_offload:
+                self.vlm.unload()
 
     def _run_tracker(self, frame, idx):
         result = self.tracker.update(frame)
@@ -159,11 +188,21 @@ class Pipeline:
             f"RIGHT = Frame B (frame {curr_idx}, later).\n{TEMPORAL_DIFF_PROMPT}"
         )
 
-        if self.sequential_offload:
-            self.vlm.load()
-        vlm_result = self.vlm.predict(combined, prompt)
-        if self.sequential_offload:
-            self.vlm.unload()
+        try:
+            if self.sequential_offload:
+                self.vlm.load()
+            vlm_result = self.vlm.predict(combined, prompt)
+        except Exception as exc:
+            return TemporalChange(
+                state_changes=[],
+                actions_detected=[],
+                frame_idx_before=prev_idx,
+                frame_idx_after=curr_idx,
+                raw_text=f"Temporal VLM error: {exc}",
+            )
+        finally:
+            if self.sequential_offload:
+                self.vlm.unload()
 
         state_changes: list[StateChange] = []
         actions: list[str] = []
@@ -326,7 +365,8 @@ class Pipeline:
                     continue
 
                 frame_start = perf_counter()
-                result = FrameResult(frame_idx=idx, frame=frame)
+                proc_frame = self._prepare_frame(frame)
+                result = FrameResult(frame_idx=idx, frame=proc_frame)
                 guided_seg = bool(
                     self.segment_on_demand and self.segmenter is not None and self.detector is not None
                 )
@@ -334,12 +374,12 @@ class Pipeline:
                 if self.sequential_offload:
                     if self.detector:
                         t0 = perf_counter()
-                        result.detection = self._run_detector(frame, idx)
+                        result.detection = self._run_detector(proc_frame, idx)
                         result.timings["detector"] = perf_counter() - t0
 
                     if self.tracker:
                         t0 = perf_counter()
-                        result.tracking = self._run_tracker(frame, idx)
+                        result.tracking = self._run_tracker(proc_frame, idx)
                         result.timings["tracker"] = perf_counter() - t0
 
                     if self.segmenter:
@@ -347,21 +387,21 @@ class Pipeline:
                         if guided_seg and result.detection is not None:
                             det_track_ids = self._update_tracks(result.detection.boxes, idx)
                             result.segmentation = self._run_segmenter_on_detections(
-                                frame, idx, result.detection.boxes, det_track_ids
+                                proc_frame, idx, result.detection.boxes, det_track_ids
                             )
                         else:
-                            result.segmentation = self._run_segmenter(frame, idx)
+                            result.segmentation = self._run_segmenter(proc_frame, idx)
                         result.timings["segmenter"] = perf_counter() - t0
 
                     if self.vlm and idx % self.vlm_skip == 0:
                         t0 = perf_counter()
-                        result.vlm = self._run_vlm(frame, idx)
+                        result.vlm = self._run_vlm(proc_frame, idx)
                         result.timings["vlm"] = perf_counter() - t0
                         if self.enable_temporal_diff and prev_vlm_frame is not None:
                             result.temporal_changes = self._run_temporal_diff(
-                                prev_vlm_frame, prev_vlm_idx, frame, idx
+                                prev_vlm_frame, prev_vlm_idx, proc_frame, idx
                             )
-                        prev_vlm_frame = frame.copy()
+                        prev_vlm_frame = proc_frame.copy()
                         prev_vlm_idx = idx
                 else:
                     detection_future = None
@@ -370,15 +410,15 @@ class Pipeline:
 
                     if self.detector:
                         t0 = perf_counter()
-                        detection_future = (executor.submit(self._run_detector, frame, idx), t0)
+                        detection_future = (executor.submit(self._run_detector, proc_frame, idx), t0)
 
                     if self.segmenter and not guided_seg:
                         t0 = perf_counter()
-                        seg_future = (executor.submit(self._run_segmenter, frame, idx), t0)
+                        seg_future = (executor.submit(self._run_segmenter, proc_frame, idx), t0)
 
                     if self.vlm and idx % self.vlm_skip == 0:
                         t0 = perf_counter()
-                        vlm_future = (executor.submit(self._run_vlm, frame, idx), t0)
+                        vlm_future = (executor.submit(self._run_vlm, proc_frame, idx), t0)
 
                     if detection_future is not None:
                         fut, t0 = detection_future
@@ -387,7 +427,7 @@ class Pipeline:
 
                     if self.tracker:
                         t0 = perf_counter()
-                        result.tracking = self._run_tracker(frame, idx)
+                        result.tracking = self._run_tracker(proc_frame, idx)
                         result.timings["tracker"] = perf_counter() - t0
 
                     if self.segmenter:
@@ -395,7 +435,7 @@ class Pipeline:
                             t0 = perf_counter()
                             det_track_ids = self._update_tracks(result.detection.boxes, idx)
                             result.segmentation = self._run_segmenter_on_detections(
-                                frame, idx, result.detection.boxes, det_track_ids
+                                proc_frame, idx, result.detection.boxes, det_track_ids
                             )
                             result.timings["segmenter"] = perf_counter() - t0
                         elif seg_future is not None:
@@ -410,15 +450,15 @@ class Pipeline:
                         if self.enable_temporal_diff and prev_vlm_frame is not None:
                             t1 = perf_counter()
                             result.temporal_changes = self._run_temporal_diff(
-                                prev_vlm_frame, prev_vlm_idx, frame, idx
+                                prev_vlm_frame, prev_vlm_idx, proc_frame, idx
                             )
                             result.timings["temporal_diff"] = perf_counter() - t1
-                        prev_vlm_frame = frame.copy()
+                        prev_vlm_frame = proc_frame.copy()
                         prev_vlm_idx = idx
 
                 if self.interaction_engine:
                     t0 = perf_counter()
-                    hands, interactions = self.interaction_engine.process(frame, result.detection)
+                    hands, interactions = self.interaction_engine.process(proc_frame, result.detection)
                     result.hand_poses = hands
                     result.interactions = interactions
                     result.timings["interactions"] = perf_counter() - t0

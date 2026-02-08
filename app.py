@@ -128,6 +128,12 @@ with st.sidebar:
     frame_skip = st.slider("Process every N frames", 1, 30, 1)
     vlm_skip = st.slider("VLM: run every N processed frames", 1, 50, 5,
                           help="VLM is slow. This skips frames independently of the main frame skip.")
+    inference_max_side = st.select_slider(
+        "Inference Max Side (px)",
+        options=[0, 320, 480, 640, 720, 960, 1280],
+        value=640,
+        help="Resize frames before inference to speed up processing. 0 = original resolution.",
+    )
     max_frames = st.number_input("Max frames to process", 10, 100000, 100)
     sequential_offload = st.checkbox("Sequential Offload (low VRAM)",
                                      value=False,
@@ -264,6 +270,7 @@ if uploaded:
             sequential_offload=sequential_offload,
             interaction_engine=interaction_engine,
             enable_temporal_diff=enable_temporal_diff,
+            inference_max_side=(None if inference_max_side == 0 else int(inference_max_side)),
         )
 
         results: list[FrameResult] = []
@@ -331,8 +338,7 @@ if uploaded:
             tab_names.append("Tracking")
         tab_names.append("Detections")
         tab_names.append("Segmentation")
-        if hand_poses or any(getattr(res, "hand_poses", []) for res in results):
-            tab_names.append("Interactions")
+        tab_names.append("Interactions")
         tab_names.append("VLM Output")
         if any(res.temporal_changes for res in results):
             tab_names.append("Temporal Changes")
@@ -509,6 +515,35 @@ if uploaded:
         # ============================================================
         if "Interactions" in tab_map:
             with tab_map["Interactions"]:
+                fps = float(info.get("fps", 0.0) or 0.0)
+                any_hands = any(getattr(res, "hand_poses", []) for res in results)
+                any_interactions = any(getattr(res, "interactions", []) for res in results)
+                hand_frames = [res for res in results if getattr(res, "hand_poses", [])]
+                interaction_frames = [res for res in results if getattr(res, "interactions", [])]
+                st.caption(
+                    f"Frames with hands: {len(hand_frames)} / {len(results)} | "
+                    f"Frames with interactions: {len(interaction_frames)} / {len(results)}"
+                )
+                if hand_frames or interaction_frames:
+                    frame_rows = []
+                    for res in results:
+                        res_hands = getattr(res, "hand_poses", [])
+                        res_inter = getattr(res, "interactions", [])
+                        if not res_hands and not res_inter:
+                            continue
+                        targets = sorted({f"{it.target_class}[{it.target_index}]" for it in res_inter})
+                        frame_rows.append(
+                            {
+                                "frame_idx": res.frame_idx,
+                                "time_s": round((res.frame_idx / fps), 3) if fps > 0 else None,
+                                "hands": len(res_hands),
+                                "interactions": len(res_inter),
+                                "targets": ", ".join(targets),
+                            }
+                        )
+                    st.write("Frames with hands/interactions:")
+                    st.dataframe(frame_rows, use_container_width=True, hide_index=True)
+
                 if hand_poses:
                     st.write(f"Hands: {len(hand_poses)}")
                     st.dataframe(
@@ -540,6 +575,11 @@ if uploaded:
                     )
                 else:
                     st.info("No interactions found for this frame.")
+                if not any_hands and not any_interactions:
+                    st.warning(
+                        "No hand/object interaction data was produced for this run. "
+                        "Enable interactions and verify MediaPipe is available."
+                    )
 
         # ============================================================
         # VLM OUTPUT TAB
@@ -554,6 +594,28 @@ if uploaded:
                     st.warning("JSON parsing failed. Raw text shown above.")
             else:
                 st.info("No VLM output for this frame (VLM skip or not enabled).")
+                vlm_frames = [
+                    res for res in results if res.vlm and (res.vlm.raw_text or res.vlm.parsed)
+                ]
+                if not vlm_frames:
+                    st.warning("No VLM output exists in this analyzed run.")
+                else:
+                    prev_candidates = [res for res in vlm_frames if res.frame_idx < r.frame_idx]
+                    next_candidates = [res for res in vlm_frames if res.frame_idx > r.frame_idx]
+                    prev_res = prev_candidates[-1] if prev_candidates else None
+                    next_res = next_candidates[0] if next_candidates else None
+                    if prev_res is not None:
+                        with st.expander(f"Nearest previous VLM output (frame {prev_res.frame_idx})", expanded=True):
+                            if prev_res.vlm is not None:
+                                st.code(prev_res.vlm.raw_text, language="text")
+                                if prev_res.vlm.parsed:
+                                    st.json(prev_res.vlm.parsed)
+                    if next_res is not None:
+                        with st.expander(f"Nearest next VLM output (frame {next_res.frame_idx})", expanded=False):
+                            if next_res.vlm is not None:
+                                st.code(next_res.vlm.raw_text, language="text")
+                                if next_res.vlm.parsed:
+                                    st.json(next_res.vlm.parsed)
 
         # ============================================================
         # TEMPORAL CHANGES TAB

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from typing import Any
 import numpy as np
 import torch
 from PIL import Image
@@ -64,6 +65,67 @@ def _build_conversation(pil_image: Image.Image, prompt: str) -> list[dict]:
 def _frame_to_pil(frame: np.ndarray) -> Image.Image:
     assert frame.ndim == 3 and frame.shape[2] == 3, f"Expected (H,W,3), got {frame.shape}"
     return Image.fromarray(frame[:, :, ::-1])
+
+
+def _resize_for_mlx_vlm(pil_image: Image.Image, max_side: int = 448) -> Image.Image:
+    """Resize image conservatively for MLX VLM to reduce token/feature mismatch risk."""
+    w, h = pil_image.size
+    longest = max(w, h)
+    if longest <= max_side:
+        return pil_image
+    scale = float(max_side) / float(longest)
+    new_w = max(1, int(round(w * scale)))
+    new_h = max(1, int(round(h * scale)))
+    return pil_image.resize((new_w, new_h), Image.Resampling.BICUBIC)
+
+
+def _resize_square_for_mlx_vlm(pil_image: Image.Image, side: int) -> Image.Image:
+    """Force a square RGB input size for stricter MLX image-token alignment."""
+    rgb = pil_image.convert("RGB")
+    return rgb.resize((side, side), Image.Resampling.BICUBIC)
+
+
+def _normalize_mlx_prompt(prompt: str) -> str:
+    """Ensure exactly one <image> token is present in the prompt."""
+    clean = prompt.strip()
+    marker = "<image>"
+    count = clean.count(marker)
+    if count == 0:
+        return f"{marker}\n{clean}"
+    if count == 1:
+        return clean
+    # Keep only the first marker occurrence and remove the rest.
+    first = clean.find(marker)
+    before = clean[: first + len(marker)]
+    after = clean[first + len(marker) :].replace(marker, "")
+    return (before + after).strip()
+
+
+def _normalize_generated_text(output: Any) -> str:
+    """Convert heterogeneous backend outputs into a plain string."""
+    if output is None:
+        return ""
+    if isinstance(output, str):
+        return output.strip()
+    if isinstance(output, bytes):
+        return output.decode("utf-8", errors="ignore").strip()
+    if isinstance(output, dict):
+        for key in ("text", "output", "response", "generated_text"):
+            value = output.get(key)
+            if isinstance(value, str):
+                return value.strip()
+    for attr in ("text", "output", "response", "generated_text"):
+        value = getattr(output, attr, None)
+        if isinstance(value, str):
+            return value.strip()
+    if isinstance(output, (list, tuple)):
+        parts: list[str] = []
+        for item in output:
+            text = _normalize_generated_text(item)
+            if text:
+                parts.append(text)
+        return "\n".join(parts).strip()
+    return str(output).strip()
 
 
 # =============================================================================
@@ -302,32 +364,48 @@ class LFM25VLMLX(VLM):
 
         from mlx_vlm import generate
 
-        conversation = [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "image"},
-                    {"type": "text", "text": prompt},
-                ],
-            },
-        ]
+        # MLX VLM expects image placeholders in text to match provided image count.
+        # Keep exactly one placeholder for one image.
+        clean_prompt = _normalize_mlx_prompt(prompt)
 
-        formatted_prompt = self._processor.apply_chat_template(
-            conversation,
-            add_generation_prompt=True,
-            tokenize=False,
-        )
+        def _gen(img: Image.Image):
+            return generate(
+                self._model,
+                self._processor,
+                clean_prompt,
+                image=img,
+                max_tokens=self.max_new_tokens,
+                temperature=0.1,
+                repetition_penalty=1.05,
+            )
 
-        raw_text = generate(
-            self._model,
-            self._processor,
-            formatted_prompt,
-            image=pil_image,
-            max_tokens=self.max_new_tokens,
-            temperature=0.1,
-            repetition_penalty=1.05,
-        ).strip()
+        try:
+            output = _gen(pil_image.convert("RGB"))
+        except ValueError as exc:
+            msg = str(exc)
+            is_mismatch = "Image features and image tokens do not match" in msg
+            if not is_mismatch:
+                raise
+            # Retry chain for problematic frames:
+            # 1) conservative aspect-preserving resize
+            # 2) fixed square sizes (often fixes patch-grid/token alignment)
+            candidates = [_resize_for_mlx_vlm(pil_image, max_side=448)]
+            candidates.extend(_resize_square_for_mlx_vlm(pil_image, side) for side in (448, 384, 336, 320, 256))
+            last_exc: Exception | None = None
+            output = None
+            for candidate in candidates:
+                try:
+                    output = _gen(candidate)
+                    last_exc = None
+                    break
+                except ValueError as inner_exc:
+                    if "Image features and image tokens do not match" not in str(inner_exc):
+                        raise
+                    last_exc = inner_exc
+            if output is None and last_exc is not None:
+                raise last_exc
 
+        raw_text = _normalize_generated_text(output)
         return VLMResult(raw_text=raw_text, parsed=_parse_json(raw_text), frame_idx=-1)
 
     def unload(self) -> None:
